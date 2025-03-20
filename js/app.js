@@ -1,12 +1,27 @@
 // Configuración de la API
 const API_CONFIG = {
     BASE_URL: 'https://api.football-data.org/v4',
-    API_KEY: '1234567890abcdef1234567890abcdef', // Reemplazar con tu API key real
+    API_KEY: '758ee9a309b44430879db8947de24812', // Tu API key
     ENDPOINTS: {
         COMPETITIONS: '/competitions',
         MATCHES: '/matches',
         TEAMS: '/teams'
-    }
+    },
+    // Competiciones populares para filtrado inicial (según documentación)
+    POPULAR_COMPETITIONS: [
+        {id: 2000, name: 'FIFA World Cup'},
+        {id: 2001, name: 'UEFA Champions League'},
+        {id: 2002, name: 'Bundesliga'},
+        {id: 2003, name: 'Eredivisie'},
+        {id: 2013, name: 'Serie A'},
+        {id: 2014, name: 'Primera Division'},
+        {id: 2015, name: 'Ligue 1'},
+        {id: 2016, name: 'Championship'},
+        {id: 2017, name: 'Primeira Liga'},
+        {id: 2018, name: 'European Championship'},
+        {id: 2019, name: 'Serie A'},
+        {id: 2021, name: 'Premier League'}
+    ]
 };
 
 // Elementos del DOM
@@ -124,16 +139,35 @@ const ui = {
 async function fetchData(endpoint, params = {}) {
     try {
         const queryString = new URLSearchParams(params).toString();
+        
+        // Según la documentación, las solicitudes directas deben funcionar con el token correcto
         const url = `${API_CONFIG.BASE_URL}${endpoint}${queryString ? `?${queryString}` : ''}`;
         
+        // Usando cors-anywhere como alternativa si es necesario
+        // const proxyUrl = 'https://cors-anywhere.herokuapp.com/';
+        // const url = `${proxyUrl}${API_CONFIG.BASE_URL}${endpoint}${queryString ? `?${queryString}` : ''}`;
+        
+        console.log(`Realizando petición a: ${endpoint}`);
+        
         const response = await fetch(url, {
+            method: 'GET',
             headers: {
-                'X-Auth-Token': API_CONFIG.API_KEY
+                'X-Auth-Token': API_CONFIG.API_KEY,
+                'Content-Type': 'application/json'
             }
         });
 
         if (!response.ok) {
-            throw new Error(`Error de red: ${response.status}`);
+            // Manejo específico de errores según la documentación
+            if (response.status === 400) {
+                throw new Error('Solicitud incorrecta. Revisa los parámetros.');
+            } else if (response.status === 403) {
+                throw new Error('No tienes permiso para acceder a este recurso. Verifica tu API key.');
+            } else if (response.status === 429) {
+                throw new Error('Has excedido el límite de peticiones. Espera antes de realizar más solicitudes.');
+            } else {
+                throw new Error(`Error de red: ${response.status}`);
+            }
         }
 
         return await response.json();
@@ -147,19 +181,44 @@ async function fetchData(endpoint, params = {}) {
 async function initializeApp() {
     try {
         ui.showLoading();
-        const { competitions } = await fetchData(API_CONFIG.ENDPOINTS.COMPETITIONS);
         
-        // Poblar el selector de competiciones
-        competitions.forEach(competition => {
+        // Dos opciones para inicializar:
+        // 1. Usar la lista predefinida (más rápido y sin consumir cuota)
+        // 2. Hacer una llamada a la API (consume cuota pero obtiene datos actualizados)
+        
+        // Opción 1: Usar competiciones populares predefinidas
+        API_CONFIG.POPULAR_COMPETITIONS.forEach(competition => {
             const option = document.createElement('option');
             option.value = competition.id;
             option.textContent = competition.name;
             elements.competitionSelect.appendChild(option);
         });
         
+        /* Opción 2: Obtener de la API (descomentar si prefieres esta opción)
+        const { competitions } = await fetchData(API_CONFIG.ENDPOINTS.COMPETITIONS);
+        competitions.forEach(competition => {
+            const option = document.createElement('option');
+            option.value = competition.id;
+            option.textContent = competition.name;
+            elements.competitionSelect.appendChild(option);
+        });
+        */
+        
+        // Añadir el mensaje sobre el plan gratuito
+        const infoElement = document.createElement('div');
+        infoElement.className = 'mt-4 p-4 bg-blue-100 text-blue-800 rounded-md';
+        infoElement.innerHTML = `
+            <p class="text-sm">
+                <strong>Nota:</strong> Esta aplicación utiliza el plan gratuito de football-data.org, 
+                que permite 10 llamadas por minuto. Selecciona una competición para ver equipos y partidos.
+            </p>
+        `;
+        document.querySelector('.container').appendChild(infoElement);
+        
         ui.hideLoading();
     } catch (error) {
-        ui.showError('No se pudieron cargar las competiciones');
+        console.error('Error al inicializar:', error);
+        ui.showError('No se pudieron cargar las competiciones. Verifica la consola para más detalles.');
     }
 }
 
@@ -172,27 +231,160 @@ elements.competitionSelect.addEventListener('change', async (e) => {
         ui.showLoading();
         ui.clearDataContainer();
 
-        // Obtener equipos y partidos
-        const [teamsData, matchesData] = await Promise.all([
-            fetchData(`${API_CONFIG.ENDPOINTS.COMPETITIONS}/${competitionId}/teams`),
-            fetchData(`${API_CONFIG.ENDPOINTS.COMPETITIONS}/${competitionId}/matches`)
-        ]);
+        // Contador para llamadas a la API
+        let apiCallCount = 0;
+        const updateApiCallCount = () => {
+            apiCallCount++;
+            console.log(`Llamadas a la API realizadas: ${apiCallCount}/10 permitidas por minuto`);
+        };
+
+        // Obtener equipos
+        const teamsData = await fetchData(`${API_CONFIG.ENDPOINTS.COMPETITIONS}/${competitionId}/teams`);
+        updateApiCallCount();
 
         // Renderizar equipos
-        teamsData.teams.forEach(team => {
-            elements.dataContainer.innerHTML += ui.renderTeamCard(team);
-        });
+        if (teamsData.teams && teamsData.teams.length > 0) {
+            const teamsSection = document.createElement('div');
+            teamsSection.innerHTML = `
+                <h2 class="text-2xl font-bold text-blue-900 mb-4">Equipos de ${teamsData.competition.name}</h2>
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            `;
+            
+            teamsData.teams.forEach(team => {
+                teamsSection.innerHTML += ui.renderTeamCard(team);
+            });
+            
+            teamsSection.innerHTML += '</div>';
+            elements.dataContainer.appendChild(teamsSection);
+        }
 
-        // Renderizar partidos recientes (últimos 5)
-        matchesData.matches.slice(0, 5).forEach(match => {
-            elements.dataContainer.innerHTML += ui.renderMatchCard(match);
+        // Obtener partidos con filtros según la documentación
+        // Limitamos a partidos de la temporada actual y máximo 10 partidos
+        const matchesData = await fetchData(`${API_CONFIG.ENDPOINTS.COMPETITIONS}/${competitionId}/matches`, {
+            dateFrom: new Date().toISOString().split('T')[0], // Desde hoy
+            limit: 10,
+            status: 'SCHEDULED' // Solo partidos programados
         });
+        updateApiCallCount();
+
+        // Renderizar partidos próximos
+        if (matchesData.matches && matchesData.matches.length > 0) {
+            const matchesSection = document.createElement('div');
+            matchesSection.className = 'mt-10';
+            matchesSection.innerHTML = `
+                <h2 class="text-2xl font-bold text-blue-900 mb-4">Próximos Partidos</h2>
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            `;
+            
+            // Ordenar partidos por fecha
+            const sortedMatches = matchesData.matches.sort((a, b) => 
+                new Date(a.utcDate) - new Date(b.utcDate)
+            );
+            
+            sortedMatches.forEach(match => {
+                matchesSection.innerHTML += ui.renderMatchCard(match);
+            });
+            
+            matchesSection.innerHTML += '</div>';
+            elements.dataContainer.appendChild(matchesSection);
+        } else {
+            // Si no hay partidos programados, intentamos obtener partidos finalizados recientes
+            const recentMatchesData = await fetchData(`${API_CONFIG.ENDPOINTS.COMPETITIONS}/${competitionId}/matches`, {
+                status: 'FINISHED',
+                limit: 5
+            });
+            updateApiCallCount();
+            
+            if (recentMatchesData.matches && recentMatchesData.matches.length > 0) {
+                const matchesSection = document.createElement('div');
+                matchesSection.className = 'mt-10';
+                matchesSection.innerHTML = `
+                    <h2 class="text-2xl font-bold text-blue-900 mb-4">Partidos Recientes</h2>
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                `;
+                
+                // Ordenar partidos por fecha (más recientes primero)
+                const sortedMatches = recentMatchesData.matches.sort((a, b) => 
+                    new Date(b.utcDate) - new Date(a.utcDate)
+                );
+                
+                sortedMatches.forEach(match => {
+                    matchesSection.innerHTML += ui.renderMatchCard(match);
+                });
+                
+                matchesSection.innerHTML += '</div>';
+                elements.dataContainer.appendChild(matchesSection);
+            }
+        }
 
         ui.hideLoading();
     } catch (error) {
-        ui.showError('No se pudieron cargar los datos de la competición');
+        console.error('Error al cargar datos:', error);
+        if (error.message.includes('429')) {
+            ui.showError('Has excedido el límite de peticiones. Espera un minuto antes de realizar más solicitudes.');
+        } else {
+            ui.showError('No se pudieron cargar los datos de la competición. Verifica la consola para más detalles.');
+        }
     }
 });
 
+// Función para comprobar la configuración de CORS
+async function testCorsConfiguration() {
+    try {
+        console.log('Comprobando configuración CORS...');
+        
+        // Intentamos una petición simple para ver si funciona directamente sin proxy
+        const response = await fetch(`${API_CONFIG.BASE_URL}/competitions/2021`, {
+            method: 'GET',
+            headers: {
+                'X-Auth-Token': API_CONFIG.API_KEY
+            }
+        });
+        
+        if (response.ok) {
+            console.log('✅ Conexión directa a la API funciona correctamente.');
+            return true;
+        } else {
+            console.log(`❌ Error en conexión directa: ${response.status}`);
+            return false;
+        }
+    } catch (error) {
+        console.error('Error al comprobar CORS:', error);
+        
+        // Si hay error de CORS, mostramos instrucciones para usar una extensión
+        const corsHelp = document.createElement('div');
+        corsHelp.className = 'mt-4 p-4 bg-red-100 text-red-800 rounded-md';
+        corsHelp.innerHTML = `
+            <h3 class="font-bold">Problema de CORS detectado</h3>
+            <p class="mt-2">Para resolver este problema, tienes estas opciones:</p>
+            <ol class="list-decimal list-inside mt-2">
+                <li>Instala una extensión como "Allow CORS" para Chrome/Firefox</li>
+                <li>Usa la aplicación desde un servidor local con Node.js</li>
+                <li>Implementa un proxy del lado del servidor</li>
+            </ol>
+        `;
+        document.querySelector('.container').appendChild(corsHelp);
+        
+        return false;
+    }
+}
+
 // Iniciar la aplicación
-initializeApp();
+document.addEventListener('DOMContentLoaded', async () => {
+    console.log('Inicializando aplicación de fútbol...');
+    
+    // Añadir mensaje de carga inicial
+    const loadingMessage = document.createElement('div');
+    loadingMessage.className = 'text-center text-blue-600 my-4';
+    loadingMessage.textContent = 'Comprobando conexión a la API...';
+    document.querySelector('.container').appendChild(loadingMessage);
+    
+    // Comprobar si tenemos problemas de CORS
+    const corsWorks = await testCorsConfiguration();
+    
+    // Eliminar mensaje de carga
+    loadingMessage.remove();
+    
+    // Si la conexión directa funciona o tenemos un proxy, inicializar
+    initializeApp();
+});
